@@ -1,0 +1,21 @@
+:root{--bg:#f5f7fa;--card:#fff;--ink:#1d2733;--mute:#5d6b7a;--line:#d9e0e8;--ok:#1b8a4b;--bad:#c62828;--warn:#b26a00;--acc:#0b5cab}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--acc);color:#fff;padding:.6rem 1.2rem;display:flex;gap:1.2rem;align-items:center;flex-wrap:wrap}
+header b{font-size:1.1rem}nav a{color:#dbe9f8;text-decoration:none;margin-right:.9rem}nav a.on,nav a:hover{color:#fff;text-decoration:underline}
+main{max-width:1150px;margin:1rem auto;padding:0 1rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1rem 1.2rem;margin-bottom:1rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.8rem}
+.kpi{font-size:1.9rem;font-weight:700}.mute{color:var(--mute)}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+table{border-collapse:collapse;width:100%;font-size:.9rem}th,td{padding:.35rem .5rem;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:#eef2f6}code{background:#eef2f6;padding:0 .3rem;border-radius:4px}
+button{background:var(--acc);color:#fff;border:0;border-radius:6px;padding:.4rem .8rem;cursor:pointer;font:inherit}
+button.danger{background:var(--bad)}button.ghost{background:#fff;color:var(--acc);border:1px solid var(--acc)}button:disabled{opacity:.5}
+.pill{display:inline-block;border-radius:99px;padding:0 .6rem;font-size:.8rem;border:1px solid}
+.pill.ok{background:#e6f5ec;border-color:#b5dec5}.pill.bad{background:#fdeaea;border-color:#f1b9b9}
+svg{width:100%;height:auto}.zone{fill:#fff;stroke:#8fa3b8;stroke-width:1.5}.zone.iso{fill:#fdeaea;stroke:var(--bad)}
+.fw{fill:#e7eef7;stroke:var(--acc);stroke-width:1.5}.fwt{font-size:15px;fill:var(--acc);font-weight:600}
+.link{stroke:#8fa3b8;stroke-width:2}.link.iso{stroke:var(--bad);stroke-dasharray:5 4}
+.zt{font-size:13px;font-weight:700;fill:#1d2733}.zc{font-size:11px;fill:#5d6b7a}.hn{font-size:12px;fill:#1d2733}
+.dot.up{fill:var(--ok)}.dot.down{fill:var(--bad)}
+.mx td.c{text-align:center;font-size:.8rem}.mx .m-ok{background:#e6f5ec}.mx .m-bad{background:#fdeaea;font-weight:700}.mx .m-na{background:#fff3d6}
+.row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}select{font:inherit;padding:.3rem}

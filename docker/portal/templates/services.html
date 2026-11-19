@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h3 style="margin-top:0">Dienste im Klinikum und wer sie nutzen darf</h3>
+<p class="mute">Berechnet aus der Policy. „Zone x“ heißt: alle Hosts dieser Zone. Der Mgmt-Hub (Monitoring) darf zur Überwachung überall hin und ist hier nicht aufgeführt.</p>
+<table><tr><th>Dienst</th><th>Host / Zone</th><th>Port</th><th>Erreichbar von</th></tr>
+{% for r in rows %}<tr><td><b>{{ r.title }}</b><br><span class="mute">{{ r.desc }}</span></td><td>{{ r.host }}<br><span class="mute">{{ r.zone }}</span></td><td>{{ r.proto }}/{{ r.port }}</td>
+<td>{% set rr = r.reach|reject('in',['mgmt-hub','Zone mgmt'])|list %}{% if rr %}{{ rr|join(', ') }}{% else %}<span class="mute">nur Monitoring</span>{% endif %}</td></tr>{% endfor %}</table></div>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block body %}
+<div class="grid">
+<div class="card"><div class="mute">Knoten erreichbar</div><div class="kpi {{ 'ok' if up==total else 'bad' }}">{{ up }} / {{ total }}</div></div>
+<div class="card"><div class="mute">Firewall-Agent</div><div class="kpi {{ 'ok' if fw_ok else 'bad' }}">{{ 'ok' if fw_ok else 'down' }}</div></div>
+<div class="card"><div class="mute">Isolierte Zonen</div><div class="kpi {{ 'bad' if isolated else 'ok' }}">{{ isolated|length }}</div><div class="mute">{{ isolated|join(', ') }}</div></div>
+<div class="card"><div class="mute">Abweichungen Policy/Ist</div>
+{% if matrix.ts %}<div class="kpi {{ 'ok' if matrix.mismatches==0 else 'bad' }}">{{ matrix.mismatches }} / {{ matrix.checks }}</div>{% else %}<div class="kpi mute">läuft an…</div>{% endif %}</div>
+</div>
+<div class="card"><h3 style="margin-top:0">Netzplan</h3>{{ svg|safe }}</div>
+<div class="card"><h3 style="margin-top:0">Abteilungen und Systeme</h3>
+<table><tr><th>Host</th><th>Zone</th><th>IP</th><th>Beschreibung</th><th>Status</th></tr>
+{% for h,hc in hosts.items() %}<tr><td><b>{{ h }}</b><br><span class="mute">{{ hc.title }}</span></td><td>{{ hc.zone }}</td><td><code>{{ hc.ip }}</code></td><td>{{ hc.description }}</td>
+<td><span class="pill {{ 'ok' if status[h].up else 'bad' }}">{{ 'up' if status[h].up else 'down' }}</span></td></tr>{% endfor %}</table></div>
+{% endblock %}

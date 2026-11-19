@@ -1,0 +1,14 @@
+---
+- name: Regeldatei aus dem Generator übernehmen
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../build/fw/nftables.conf"
+    dest: /etc/nftables.conf
+    mode: "0600"
+    validate: nft -c -f %s
+  notify: Regeln laden
+
+- name: Prüfen, dass die Regeln geladen sind
+  ansible.builtin.command: nft list chain ip klinikum forward
+  register: fw_rules
+  changed_when: false
+  failed_when: "'default-deny' not in fw_rules.stdout"

@@ -1,0 +1,260 @@
+# =============================================================================
+# Klinikum-Lab: Topologie als Code (Single Source of Truth)
+# Aus dieser Datei werden Firewall-Regeln, Docker-Compose, Monitoring,
+# VPN-Konfigurationen und der Testkatalog erzeugt (tools/render.py).
+# Alle Daten sind synthetisch. Es gibt keine echten Patientendaten.
+# =============================================================================
+name: klinikum-lab
+supernet: 10.10.0.0/16
+firewall:
+  host_octet: 1          # Firewall ist in jeder Zone auf x.x.x.1
+  api_port: 9000         # fw-agent (nur aus Zone mgmt erreichbar)
+agent_port: 7070         # Messpunkt (Probe/Metriken) auf jedem Knoten
+
+zones:
+  mgmt:       {vlan: 10, cidr: 10.10.10.0/24, title: "Management & Monitoring"}
+  server:     {vlan: 20, cidr: 10.10.20.0/24, title: "Klinik-Server (KIS, PACS, LIS, AD)"}
+  data:       {vlan: 25, cidr: 10.10.25.0/24, title: "Datenbanken"}
+  verwaltung: {vlan: 30, cidr: 10.10.30.0/24, title: "Verwaltung"}
+  klinik:     {vlan: 40, cidr: 10.10.40.0/24, title: "Stationen & Ärzte"}
+  medgeraete: {vlan: 50, cidr: 10.10.50.0/24, title: "Medizingeräte (MRT, Infusion, EKG)"}
+  gast:       {vlan: 60, cidr: 10.10.60.0/24, title: "Gäste-WLAN"}
+  dmz:        {vlan: 70, cidr: 10.10.70.0/24, title: "DMZ (Patientenportal, VPN-Gateway)"}
+  internet:   {vlan: 99, cidr: 10.10.99.0/24, title: "Internet (simuliert)"}
+
+# --- Hosts -------------------------------------------------------------------
+# services: Dienste, die der Host anbietet. kind: http | tcp | udp
+# data: Art der synthetischen Daten, die der Dienst liefert.
+hosts:
+  mgmt-hub:
+    zone: mgmt
+    ip: 10.10.10.10
+    kind: hub
+    title: "Mgmt-Hub"
+    description: "NetOps-Portal, Prometheus, Grafana, Alertmanager und Blackbox-Exporter in einem Netzwerk-Namespace."
+    services:
+      - {name: portal,     port: 8080, kind: http, title: "NetOps-Portal"}
+      - {name: grafana,    port: 3000, kind: http, title: "Grafana"}
+      - {name: prometheus, port: 9090, kind: http, title: "Prometheus"}
+
+  kis:
+    zone: server
+    ip: 10.10.20.10
+    title: "KIS (Krankenhausinformationssystem)"
+    description: "Patientenakte und Dokumentation (synthetische Daten)."
+    services:
+      - {name: kis-web, port: 8080, kind: http, data: kis, title: "KIS Weboberfläche"}
+  pacs:
+    zone: server
+    ip: 10.10.20.11
+    title: "PACS (Bildarchiv)"
+    description: "Bildarchiv für Radiologie. Nimmt DICOM-Bilder der Geräte an."
+    services:
+      - {name: pacs-viewer, port: 8080, kind: http, data: pacs, title: "PACS Viewer"}
+      - {name: dicom,       port: 4242, kind: tcp,  title: "DICOM-Empfang"}
+  lis:
+    zone: server
+    ip: 10.10.20.12
+    title: "LIS (Laborinformationssystem)"
+    description: "Laboraufträge und Befunde."
+    services:
+      - {name: lis-web, port: 8080, kind: http, data: lis, title: "LIS Weboberfläche"}
+  ad:
+    zone: server
+    ip: 10.10.20.13
+    title: "Active Directory / LDAP"
+    description: "Zentrale Anmeldung und Gruppen."
+    services:
+      - {name: ldap, port: 389, kind: tcp, title: "LDAP"}
+  db:
+    zone: data
+    ip: 10.10.25.10
+    title: "Datenbankserver"
+    description: "Gemeinsame Datenbank für KIS, PACS und LIS."
+    services:
+      - {name: postgres, port: 5432, kind: tcp, title: "PostgreSQL"}
+
+  ws-verwaltung:
+    zone: verwaltung
+    ip: 10.10.30.11
+    title: "Arbeitsplatz Verwaltung"
+    description: "Abrechnung und Aufnahme."
+    services: []
+  drucker-verwaltung:
+    zone: verwaltung
+    ip: 10.10.30.20
+    title: "Drucker Verwaltung"
+    description: "Netzwerkdrucker (RAW 9100)."
+    services:
+      - {name: print, port: 9100, kind: tcp, title: "Druckdienst"}
+
+  ws-arzt:
+    zone: klinik
+    ip: 10.10.40.11
+    title: "Arbeitsplatz Arzt"
+    description: "Visite und Befundung."
+    services: []
+  ws-pflege:
+    zone: klinik
+    ip: 10.10.40.12
+    title: "Arbeitsplatz Pflege"
+    description: "Pflegedokumentation auf Station."
+    services: []
+  drucker-station:
+    zone: klinik
+    ip: 10.10.40.20
+    title: "Drucker Station"
+    description: "Netzwerkdrucker auf Station."
+    services:
+      - {name: print, port: 9100, kind: tcp, title: "Druckdienst"}
+
+  mrt:
+    zone: medgeraete
+    ip: 10.10.50.11
+    title: "MRT"
+    description: "Magnetresonanztomograph. Sendet Bilder per DICOM an das PACS."
+    services:
+      - {name: mrt-web, port: 8080, kind: http, data: device, title: "MRT Bedienoberfläche"}
+  infusion:
+    zone: medgeraete
+    ip: 10.10.50.12
+    title: "Infusionspumpen-Zentrale"
+    description: "Zentrale für Infusionspumpen. Darf nur lokal erreichbar sein."
+    services:
+      - {name: infusion-web, port: 8080, kind: http, data: device, title: "Infusionspumpen-Zentrale"}
+  ekg:
+    zone: medgeraete
+    ip: 10.10.50.13
+    title: "EKG-Gerät"
+    description: "EKG-Station."
+    services:
+      - {name: ekg-web, port: 8080, kind: http, data: device, title: "EKG Weboberfläche"}
+
+  gast-client:
+    zone: gast
+    ip: 10.10.60.11
+    title: "Gäste-Gerät"
+    description: "Smartphone im Gäste-WLAN."
+    services: []
+
+  patientenportal:
+    zone: dmz
+    ip: 10.10.70.10
+    title: "Patientenportal"
+    description: "Terminbuchung für Patienten, spricht intern nur mit dem KIS."
+    services:
+      - {name: portal-web, port: 8080, kind: http, data: generic, title: "Patientenportal"}
+  vpn-gw:
+    zone: dmz
+    ip: 10.10.70.11
+    role: vpn-gateway
+    title: "VPN-Gateway (WireGuard)"
+    description: "Einwahl für Administratoren und Außenstellen."
+    services:
+      - {name: wireguard, port: 51820, kind: udp, title: "WireGuard"}
+
+  admin-laptop:
+    zone: internet
+    ip: 10.10.99.11
+    role: vpn-client
+    vpn_peer: admin-laptop
+    title: "Admin-Laptop (extern)"
+    description: "Administrator im Homeoffice, wählt sich per VPN ein."
+    services: []
+  mvz-aussenstelle:
+    zone: internet
+    ip: 10.10.99.12
+    role: vpn-client
+    vpn_peer: mvz-aussenstelle
+    title: "MVZ-Außenstelle (extern)"
+    description: "Medizinisches Versorgungszentrum, greift per VPN auf das KIS zu."
+    services: []
+  aerztin-handy:
+    zone: internet
+    ip: 10.10.99.13
+    role: vpn-client
+    vpn_peer: aerztin-handy
+    title: "Handy Bereitschaftsärztin (extern)"
+    description: "Dienst-Smartphone (verwaltet) der Bereitschaftsärztin, WireGuard-App, nur KIS."
+    services: []
+
+# --- VPN (WireGuard) ---------------------------------------------------------
+vpn:
+  gateway: vpn-gw
+  listen_port: 51820
+  pool: 10.99.0.0/24
+  gateway_address: 10.99.0.1
+  # Metadaten (user, device, location) sind Lab-Daten für die VPN-Live-Seite.
+  # location = simulierter Standort (im Lab sind alle Quell-IPs privat). Im Betrieb
+  # kommt der Standort aus GeoIP der Quell-IP. expected_countries steuert den Alarm.
+  gateway_location: {city: Offenburg, country: DE, lat: 48.47, lon: 7.94}
+  peers:
+    admin-laptop:
+      address: 10.99.0.2
+      allowed_zones: [mgmt]
+      description: "Remote-Administration: nur Mgmt-Hub (Portal, Grafana)."
+      user: "Admin im Bereitschaftsdienst"
+      device: laptop
+      location: {city: Bielefeld, country: DE, lat: 52.02, lon: 8.53}
+      expected_countries: [DE]
+    mvz-aussenstelle:
+      address: 10.99.0.3
+      allowed_zones: [server]
+      description: "Außenstelle: nur KIS-Weboberfläche."
+      user: "MVZ Kehl (Standortkopplung)"
+      device: site
+      location: {city: Kehl, country: DE, lat: 48.57, lon: 7.82}
+      expected_countries: [DE]
+    aerztin-handy:
+      address: 10.99.0.4
+      allowed_zones: [server]
+      description: "Dienst-Handy: nur KIS-Weboberfläche."
+      user: "Bereitschaftsärztin"
+      device: phone
+      location: {city: Freiburg, country: DE, lat: 47.99, lon: 7.85}
+      expected_countries: [DE]
+
+# --- Firewall-Policy (Default: alles verboten) ------------------------------
+# from/to: {zone: <name>|"*"} | {host: <name>} | {hosts: [..]} | {vpn_peer: <name>}
+# ports: "tcp/8080", "udp/51820", "icmp"
+policy:
+  - {id: P01, name: "Monitoring: Agenten und Ping",       from: {host: mgmt-hub}, to: {zone: "*"}, ports: [tcp/7070, icmp]}
+  - {id: P02, name: "Monitoring: Dienst-Proben",          from: {host: mgmt-hub}, to: {zone: "*"}, ports: [tcp/8080, tcp/3000, tcp/9090, tcp/4242, tcp/5432, tcp/389, tcp/9100]}
+  - {id: P03, name: "Verwaltung zum KIS",                 from: {zone: verwaltung}, to: {host: kis}, ports: [tcp/8080]}
+  - {id: P04, name: "Verwaltung zur Anmeldung (LDAP)",    from: {zone: verwaltung}, to: {host: ad},  ports: [tcp/389]}
+  - {id: P05, name: "Stationen zu KIS, PACS, LIS",        from: {zone: klinik},     to: {hosts: [kis, pacs, lis]}, ports: [tcp/8080]}
+  - {id: P06, name: "Stationen zur Anmeldung (LDAP)",     from: {zone: klinik},     to: {host: ad},  ports: [tcp/389]}
+  - {id: P07, name: "Medizingeräte senden DICOM ans PACS", from: {zone: medgeraete}, to: {host: pacs}, ports: [tcp/4242]}
+  - {id: P08, name: "Anwendungen zur Datenbank",          from: {hosts: [kis, pacs, lis]}, to: {host: db}, ports: [tcp/5432]}
+  - {id: P09, name: "Gäste zum Patientenportal",          from: {zone: gast}, to: {host: patientenportal}, ports: [tcp/8080]}
+  - {id: P10, name: "Patientenportal zum KIS",            from: {host: patientenportal}, to: {host: kis}, ports: [tcp/8080]}
+  - {id: P11, name: "VPN-Einwahl aus dem Internet",       from: {zone: internet}, to: {host: vpn-gw}, ports: [udp/51820]}
+  - {id: P12, name: "VPN Admin zum Mgmt-Hub",             from: {vpn_peer: admin-laptop},    to: {host: mgmt-hub}, ports: [tcp/8080, tcp/3000]}
+  - {id: P13, name: "VPN Außenstelle zum KIS",            from: {vpn_peer: mvz-aussenstelle}, to: {host: kis},     ports: [tcp/8080]}
+  - {id: P14, name: "Monitoring holt WireGuard-Exporter",   from: {host: mgmt-hub}, to: {host: vpn-gw}, ports: [tcp/9586]}
+  - {id: P15, name: "VPN Dienst-Handy zum KIS",            from: {vpn_peer: aerztin-handy}, to: {host: kis}, ports: [tcp/8080]}
+
+# --- Erwartungen der Sicherheitsarchitektur (unabhängige Absicherung) -------
+# Der Generator bricht ab, wenn die Policy diesen Aussagen widerspricht.
+assertions:
+  - {from: {zone: medgeraete}, to: {host: kis},  port: tcp/8080, expect: deny,  why: "Medizingeräte dürfen nicht an das KIS"}
+  - {from: {zone: medgeraete}, to: {host: db},   port: tcp/5432, expect: deny,  why: "Kein Direktzugriff auf die Datenbank"}
+  - {from: {zone: medgeraete}, to: {host: drucker-station}, port: tcp/9100, expect: deny, why: "Keine Querverbindung zu Stationen"}
+  - {from: {zone: medgeraete}, to: {host: pacs}, port: tcp/4242, expect: allow, why: "DICOM zum PACS ist erlaubt"}
+  - {from: {zone: gast},       to: {zone: server}, port: tcp/8080, expect: deny, why: "Gäste sehen keine Klinik-Server"}
+  - {from: {zone: gast},       to: {zone: data},   port: tcp/5432, expect: deny, why: "Gäste sehen keine Datenbanken"}
+  - {from: {zone: verwaltung}, to: {host: db},   port: tcp/5432, expect: deny,  why: "Arbeitsplätze nie direkt zur Datenbank"}
+  - {from: {zone: klinik},     to: {host: db},   port: tcp/5432, expect: deny,  why: "Arbeitsplätze nie direkt zur Datenbank"}
+  - {from: {zone: verwaltung}, to: {host: pacs}, port: tcp/8080, expect: deny,  why: "Verwaltung braucht keine Bilder"}
+  - {from: {host: patientenportal}, to: {host: db},   port: tcp/5432, expect: deny, why: "DMZ nie direkt zur Datenbank"}
+  - {from: {host: patientenportal}, to: {host: pacs}, port: tcp/8080, expect: deny, why: "DMZ spricht nur mit dem KIS"}
+  - {from: {host: vpn-gw},     to: {host: kis},  port: tcp/8080, expect: deny,  why: "Das Gateway selbst bekommt keine Rechte"}
+  - {from: {host: admin-laptop}, to: {host: mgmt-hub}, port: tcp/8080, expect: allow, why: "Admin per VPN zum Portal"}
+  - {from: {host: admin-laptop}, to: {host: kis},      port: tcp/8080, expect: deny,  why: "Admin-VPN sieht keine Klinik-Server"}
+  - {from: {host: mvz-aussenstelle}, to: {host: kis},      port: tcp/8080, expect: allow, why: "Außenstelle zum KIS"}
+  - {from: {host: mvz-aussenstelle}, to: {host: mgmt-hub}, port: tcp/8080, expect: deny,  why: "Außenstelle hat keinen Zugriff aufs Management"}
+  - {from: {host: admin-laptop}, to: {zone: server}, port: tcp/8080, expect: deny, why: "Ohne passende VPN-Freigabe ist nichts erreichbar"}
+  - {from: {host: aerztin-handy}, to: {host: kis},      port: tcp/8080, expect: allow, why: "Bereitschaft darf aufs KIS"}
+  - {from: {host: aerztin-handy}, to: {host: pacs},     port: tcp/8080, expect: deny,  why: "Handy sieht keine Bilder"}
+  - {from: {host: aerztin-handy}, to: {host: mgmt-hub}, port: tcp/8080, expect: deny,  why: "Handy hat keinen Zugriff aufs Management"}
+  - {from: {host: aerztin-handy}, to: {host: db},       port: tcp/5432, expect: deny,  why: "Nie zur Datenbank"}

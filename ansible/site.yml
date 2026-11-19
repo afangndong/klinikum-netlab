@@ -1,0 +1,6 @@
+---
+- name: Firewall-Regeln aus der Policy ausrollen
+  hosts: firewalls
+  gather_facts: false
+  roles:
+    - firewall

@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h3 style="margin-top:0">Notfall-Isolation</h3>
+<p class="mute">Schneidet eine Zone sofort komplett ab (z. B. bei Verdacht auf Schadsoftware auf den Stationsrechnern). Die Zone <code>mgmt</code> kann nicht isoliert werden.</p>
+<table><thead><tr><th>Zone</th><th>Netz</th><th>Status</th><th></th></tr></thead><tbody id="zones"></tbody></table><div id="events" class="mute"></div></div>
+<div class="card"><h3 style="margin-top:0">Regeln und Trefferzähler</h3><table><thead><tr><th>ID</th><th>Name</th><th>Pakete</th><th>Bytes</th></tr></thead><tbody id="rules"></tbody></table>
+<p class="mute">Standard ist „verwerfen“. Nur was in der Policy steht, wird durchgelassen. Verkehr innerhalb einer Zone wird nicht von dieser Firewall gefiltert (bekannte Grenze, siehe docs/ARCHITEKTUR.md).</p></div>
+{% endblock %}{% block script %}<script>
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function load(){try{const d=await api('/api/firewall');
+zones.innerHTML=Object.entries(d.zones).map(([z,v])=>`<tr><td><b>${esc(z)}</b> <span class="mute">${esc(v.title)}</span></td><td><code>${esc(v.cidr)}</code></td><td><span class="pill ${v.isolated?'bad':'ok'}">${v.isolated?'ISOLIERT':'normal'}</span></td><td>${z==='mgmt'?'':`<button class="${v.isolated?'ghost':'danger'}" onclick="toggle('${z}',${v.isolated})">${v.isolated?'Freigeben':'Isolieren'}</button>`}</td></tr>`).join('');
+rules.innerHTML=d.rules.map(r=>`<tr><td>${esc(r.id)}</td><td>${esc(r.name)}</td><td>${r.packets}</td><td>${r.bytes}</td></tr>`).join('');
+events.textContent=d.events.length?'Ereignisse: '+d.events.map(e=>`${e.t} ${e.zone} ${e.action}`).join(' · '):''}catch(e){zones.innerHTML=`<tr><td colspan=4 class="bad">${esc(e.message)}</td></tr>`}}
+async function toggle(z,iso){if(!iso&&!confirm('Zone '+z+' wirklich komplett abschneiden?'))return;try{await api('/api/'+(iso?'release':'isolate')+'/'+z,{method:'POST'})}catch(e){alert(e.message)}load()}
+load();setInterval(load,5000);
+</script>{% endblock %}

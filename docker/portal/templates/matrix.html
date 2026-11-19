@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><div class="row"><h3 style="margin:0">Erreichbarkeit: Soll gegen Ist</h3><button id="run">Jetzt prüfen</button><span id="meta" class="mute"></span></div>
+<p class="mute">Jeder Quell-Host versucht, die Dienste aller anderen Hosts zu erreichen. Das Ergebnis wird mit der Policy aus <code>topology/klinikum.yml</code> verglichen. Rot = Firewall verhält sich anders als geplant. Automatische Prüfung alle {{ interval }} s.</p>
+<div class="row"><label>Quelle <select id="src"></select></label><label><input type="checkbox" id="onlyBad"> nur Abweichungen</label><label><input type="checkbox" id="onlyAllow"> nur erlaubte</label></div></div>
+<div class="card"><table class="mx"><thead><tr><th>Quelle</th><th>Ziel</th><th>Dienst</th><th>Soll</th><th>Ist</th><th>Ergebnis</th><th>ms</th></tr></thead><tbody id="rows"></tbody></table></div>
+{% endblock %}{% block script %}<script>
+let data=null;
+function draw(){if(!data)return;const s=src.value,bad=onlyBad.checked,al=onlyAllow.checked;
+const rows=data.results.filter(r=>(!s||r.src===s)&&(!bad||!r.match)&&(!al||r.expected==='allow'));
+document.getElementById('rows').innerHTML=rows.map(r=>`<tr class="${r.match?'':'m-bad'}"><td>${r.src}</td><td>${r.dst}</td><td>${r.service||''} ${r.proto||'tcp'}/${r.port}</td><td class="c">${r.expected}</td><td class="c">${r.actual??'?'}</td><td class="c ${r.actual===null?'m-na':r.match?'m-ok':'m-bad'}">${r.actual===null?'Messpunkt fehlt':r.match?'ok':'ABWEICHUNG'}</td><td class="c">${r.ms??''}</td></tr>`).join('')}
+async function load(){data=await api('/api/matrix');
+if(!src.options.length){src.add(new Option('alle',''));[...new Set(data.results.map(r=>r.src))].sort().forEach(x=>src.add(new Option(x,x)))}
+meta.textContent=data.ts?`${data.checks} Prüfungen, ${data.mismatches} Abweichungen, Dauer ${data.duration_s}s, Stand ${new Date(data.ts*1000).toLocaleTimeString()}`:(data.running?'Lauf aktiv…':'noch kein Ergebnis');draw()}
+run.onclick=async()=>{run.disabled=true;meta.textContent='prüfe…';try{await api('/api/matrix/run',{method:'POST'});await load()}catch(e){meta.textContent=e.message}run.disabled=false};
+[src,onlyBad,onlyAllow].forEach(e=>e.onchange=draw);load();setInterval(load,15000);
+</script>{% endblock %}

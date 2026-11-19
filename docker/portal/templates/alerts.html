@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h3 style="margin-top:0">Aktive Alarme (Alertmanager)</h3><div id="active" class="mute">lade…</div></div>
+<div class="card"><h3 style="margin-top:0">Zuletzt per Webhook empfangen</h3><table><thead><tr><th>Zeit</th><th>Status</th><th>Alarm</th><th>Meldung</th></tr></thead><tbody id="hook"></tbody></table></div>
+{% endblock %}{% block script %}<script>
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function load(){const d=await api('/api/alerts');
+active.innerHTML=d.alerts===null?'<span class="bad">Alertmanager nicht erreichbar</span>':d.alerts.length?'<table><tr><th>Alarm</th><th>Schwere</th><th>Meldung</th><th>Seit</th></tr>'+d.alerts.map(a=>`<tr><td>${esc(a.name)}</td><td>${esc(a.severity)}</td><td>${esc(a.summary)}</td><td>${esc(a.since)}</td></tr>`).join('')+'</table>':'<span class="ok">Keine aktiven Alarme.</span>';
+hook.innerHTML=d.webhook.slice().reverse().map(a=>`<tr><td>${esc(a.t)}</td><td>${esc(a.status)}</td><td>${esc(a.name)}</td><td>${esc(a.summary)}</td></tr>`).join('')}
+load();setInterval(load,10000);
+</script>{% endblock %}

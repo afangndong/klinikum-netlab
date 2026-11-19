@@ -1,0 +1,11 @@
+# prometheus_wireguard_exporter (MindFlavor), aus den Quellen gebaut. Der Bau dauert einige Minuten.
+FROM rust:1-slim-bookworm AS build
+RUN cargo install prometheus_wireguard_exporter
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends wireguard-tools ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/cargo/bin/prometheus_wireguard_exporter /usr/local/bin/prometheus_wireguard_exporter
+# -n: Konfigdatei für sprechende Namen (friendly_name). -r (Quell-IP als Label) bewusst AUS: Datensparsamkeit.
+ENTRYPOINT ["/usr/local/bin/prometheus_wireguard_exporter"]
+CMD ["-n", "/etc/wireguard/wg0.conf"]

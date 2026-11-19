@@ -1,0 +1,16 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: sudo apt-get update && sudo apt-get install -y nftables iproute2
+      - run: pip install -r requirements.txt ansible-core
+      - run: yamllint -d relaxed topology ansible
+      - run: python tools/check_policy.py
+      - run: docker compose config -q
+      - run: sudo -E env "PATH=$PATH" python tools/netns_test.py
+      - run: cd ansible && ansible-playbook site.yml --syntax-check

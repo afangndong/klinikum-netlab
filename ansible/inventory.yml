@@ -1,0 +1,10 @@
+# Lab: Die Firewall ist ein Docker-Container, Ansible spricht über den docker-Connection-Plugin.
+# Produktiv würde hier ein echter Host stehen (ansible_connection: ssh).
+all:
+  children:
+    firewalls:
+      hosts:
+        fw:
+          ansible_connection: community.docker.docker
+          ansible_docker_extra_args: ""
+          ansible_host: "{{ lookup('env', 'FW_CONTAINER') | default('klinikum-lab-fw-1', true) }}"

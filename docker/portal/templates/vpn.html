@@ -1,0 +1,71 @@
+{% extends "base.html" %}{% block body %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<div class="grid">
+<div class="card"><div class="mute">Gateway</div><div class="kpi" id="k-gw">…</div><div class="mute">{{ vpn.gateway }} · <code>{{ gw.ip }}</code> · UDP/{{ vpn.listen_port }}</div></div>
+<div class="card"><div class="mute">Verbundene Peers</div><div class="kpi" id="k-act">…</div><div class="mute">aktiv = Handshake in den letzten {{ active_seconds }} s</div></div>
+<div class="card"><div class="mute">Unerwarteter Standort</div><div class="kpi" id="k-geo">…</div><div class="mute">Land nicht in der Erlaubnisliste</div></div>
+<div class="card"><div class="mute">Tunnelnetz</div><div class="kpi" style="font-size:1.3rem"><code>{{ vpn.pool }}</code></div><div class="mute">pro Peer eine /32-Adresse</div></div>
+</div>
+<div class="card"><h3 style="margin-top:0">Wer ist wo verbunden?</h3>
+<div id="map" style="height:380px;border-radius:8px;background:#e8eef4"></div>
+<div id="mapnote" class="mute"></div>
+<p class="mute">Im Lab sind alle Quelladressen privat, deshalb stammen die Standorte aus der Topologie (simuliert). Im Betrieb liefert eine GeoIP-Datenbank die Position der Quell-IP, ungenau (Stadt- bis Regionsebene) und bei Firmen-Proxys oder Mobilfunk teils falsch.</p>
+<div class="row"><b>Reise simulieren:</b>
+<select id="simpeer">{% for n in vpn.peers %}<option>{{ n }}</option>{% endfor %}</select>
+<select id="simplace">{% for k,v in presets.items() %}<option value="{{ k }}">{{ v.city }} ({{ v.country }})</option>{% endfor %}</select>
+<button id="simgo" class="danger">Anwenden</button><button id="simreset" class="ghost">Zurücksetzen</button></div></div>
+<div class="card"><h3 style="margin-top:0">Tunnel und Rechte</h3><div id="graph"></div>
+<p class="mute">Linie Peer → Gateway: Tunnel (grün = aktiv, rot gestrichelt = kein aktueller Handshake, Dicke = Datenmenge). Gateway → Zone: was der Peer per AllowedIPs routen darf. Was davon wirklich durchkommt, entscheidet zusätzlich die Firewall-Regel pro Peer.</p></div>
+<div class="card"><h3 style="margin-top:0">Peers</h3>
+<table><thead><tr><th>Peer / Nutzer</th><th>Gerät</th><th>Tunnel-IP</th><th>Quell-Endpunkt</th><th>Letzter Handshake</th><th>Empfangen / Gesendet</th><th>Standort</th><th>Status</th></tr></thead><tbody id="peers"></tbody></table></div>
+<div class="card"><p class="mute"><b>Zwei Ebenen:</b> AllowedIPs im WireGuard-Peer bestimmen, was in den Tunnel geroutet wird. Die Firewall-Policy entscheidet pro Peer, was durchkommt. Fällt eine Ebene aus, hält die andere. Prüfen im Lab: <code>docker compose exec vpn-gw wg show</code></p></div>
+{% endblock %}{% block script %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ICON={laptop:'💻',phone:'📱',site:'🏢'};
+const fmtB=n=>n>1e9?(n/1e9).toFixed(2)+' GB':n>1e6?(n/1e6).toFixed(1)+' MB':n>1e3?(n/1e3).toFixed(1)+' kB':n+' B';
+const fmtAge=a=>a==null?'nie':a<90?a+' s':Math.round(a/60)+' min';
+let map=null,layer=null,state=null;
+function initMap(){
+  if(typeof L==='undefined'){document.getElementById('mapnote').textContent='Karte nicht geladen (der Browser braucht Internet für Leaflet und die Kacheln). Standorte stehen in der Tabelle.';document.getElementById('map').style.display='none';return}
+  map=L.map('map').setView([49.5,9.5],5);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:12,attribution:'© OpenStreetMap'}).addTo(map);
+  layer=L.layerGroup().addTo(map);
+}
+function drawMap(){
+  if(!map||!state)return; layer.clearLayers(); const g=state.gateway.location, pts=[[g.lat,g.lon]];
+  L.circleMarker([g.lat,g.lon],{radius:9,color:'#0b5cab',fillColor:'#0b5cab',fillOpacity:.9}).bindTooltip('Gateway {{ vpn.gateway }} · '+esc(g.city)).addTo(layer);
+  state.peers.forEach(p=>{const l=p.location,col=p.geo_unexpected?'#c62828':p.up?'#1b8a4b':'#9aa5b1';pts.push([l.lat,l.lon]);
+    L.polyline([[l.lat,l.lon],[g.lat,g.lon]],{color:col,weight:p.up?3:1.5,dashArray:p.up?null:'6 6'}).addTo(layer);
+    L.circleMarker([l.lat,l.lon],{radius:8,color:col,fillColor:col,fillOpacity:.85}).bindTooltip(esc(p.peer)+' · '+esc(l.city)+' ('+esc(l.country)+') · '+(p.up?'aktiv':'nicht verbunden')).addTo(layer)});
+  map.fitBounds(pts,{padding:[40,40],maxZoom:7});
+}
+function drawGraph(){
+  const P=state.peers,H=70+P.length*58,W=900;let s=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">`;
+  const gx=430,gy=H/2,zones=[...new Set(P.flatMap(p=>p.allowed_zones))];
+  s+=`<rect x="${gx-60}" y="${gy-30}" width="120" height="60" rx="10" fill="#e7eef7" stroke="#0b5cab" stroke-width="2"/><text x="${gx}" y="${gy-4}" text-anchor="middle" font-size="13" font-weight="700">{{ vpn.gateway }}</text><text x="${gx}" y="${gy+14}" text-anchor="middle" font-size="11" fill="#5d6b7a">{{ vpn.gateway_address }}</text>`;
+  const zy=z=>40+zones.indexOf(z)*((H-80)/Math.max(1,zones.length-1||1));
+  zones.forEach((z,i)=>{const y=zones.length==1?gy:40+i*((H-80)/(zones.length-1));
+    s+=`<rect x="760" y="${y-22}" width="120" height="44" rx="8" fill="#fff" stroke="#8fa3b8"/><text x="820" y="${y+5}" text-anchor="middle" font-size="13" font-weight="700">Zone ${esc(z)}</text>`;
+    P.filter(p=>p.allowed_zones.includes(z)).length&&(s+=`<line x1="${gx+60}" y1="${gy}" x2="760" y2="${y}" stroke="#8fa3b8" stroke-width="2"/>`)});
+  const maxB=Math.max(1,...P.map(p=>p.rx_bytes+p.tx_bytes));
+  P.forEach((p,i)=>{const y=45+i*58,col=p.up?'#1b8a4b':'#c62828',w=1.5+4*((p.rx_bytes+p.tx_bytes)/maxB);
+    s+=`<rect x="20" y="${y-24}" width="250" height="48" rx="8" fill="#fff" stroke="${p.geo_unexpected?'#c62828':'#8fa3b8'}" stroke-width="${p.geo_unexpected?3:1.5}"/>`;
+    s+=`<text x="34" y="${y-4}" font-size="13" font-weight="700">${ICON[p.device]||''} ${esc(p.peer)}</text><text x="34" y="${y+13}" font-size="11" fill="#5d6b7a">${esc(p.address)} · ${esc(p.location.city)} (${esc(p.location.country)})</text>`;
+    s+=`<line x1="270" y1="${y}" x2="${gx-60}" y2="${gy}" stroke="${col}" stroke-width="${w}" ${p.up?'':'stroke-dasharray="7 6"'}/>`;
+    s+=`<text x="${(270+gx-60)/2}" y="${(y+gy)/2-6}" text-anchor="middle" font-size="10" fill="#5d6b7a">${p.up?fmtB(p.rx_bytes+p.tx_bytes):'getrennt'}</text>`});
+  document.getElementById('graph').innerHTML=s+'</svg>';
+}
+function drawTable(){
+  document.getElementById('peers').innerHTML=state.peers.map(p=>`<tr><td><b>${esc(p.peer)}</b><br><span class="mute">${esc(p.user)}</span></td><td>${ICON[p.device]||''} ${esc(p.device)}</td><td><code>${esc(p.address)}</code><br><span class="mute">darf: ${p.allowed_zones.map(esc).join(', ')}</span></td><td>${p.endpoint?'<code>'+esc(p.endpoint)+'</code>':'<span class="mute">–</span>'}</td><td>${fmtAge(p.handshake_age_s)}</td><td>${fmtB(p.rx_bytes)} / ${fmtB(p.tx_bytes)}</td><td>${esc(p.location.city)} (${esc(p.location.country)})<br><span class="mute">${esc(p.location.source)}</span>${p.geo_unexpected?'<br><span class="pill bad">unerwartetes Land</span>':''}</td><td><span class="pill ${p.up?'ok':'bad'}">${p.up?'verbunden':'getrennt'}</span></td></tr>`).join('')}
+function draw(){
+  const g=document.getElementById('k-gw');g.textContent=state.gateway.reachable?'erreichbar':'nicht erreichbar';g.className='kpi '+(state.gateway.reachable?'ok':'bad');
+  const a=document.getElementById('k-act');a.textContent=state.active+' / '+state.peers.length;a.className='kpi '+(state.active==state.peers.length?'ok':'warn');
+  const u=document.getElementById('k-geo');u.textContent=state.unexpected;u.className='kpi '+(state.unexpected?'bad':'ok');
+  drawTable();drawGraph();drawMap()}
+async function load(){try{state=await api('/api/vpn');draw()}catch(e){document.getElementById('peers').innerHTML='<tr><td colspan=8 class="bad">'+esc(e.message)+'</td></tr>'}}
+async function sim(preset){try{const r=await api('/api/vpn/simulate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({peer:simpeer.value,preset})});state=r.state;draw()}catch(e){alert(e.message)}}
+simgo.onclick=()=>sim(simplace.value);simreset.onclick=()=>sim('reset');
+initMap();load();setInterval(load,10000);
+</script>{% endblock %}

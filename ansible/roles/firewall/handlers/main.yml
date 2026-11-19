@@ -1,0 +1,5 @@
+---
+# Hinweis: nft -f mit "flush ruleset" setzt auch die Notfall-Isolation zurück. Bewusst so.
+- name: Regeln laden
+  ansible.builtin.command: nft -f /etc/nftables.conf
+  changed_when: true

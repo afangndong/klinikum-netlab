@@ -1,0 +1,10 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title }} · NetOps-Portal</title><link rel="stylesheet" href="/static/style.css"></head><body>
+<header><b>🏥 {{ title }}</b><nav>
+{% for p,l in [('index','Übersicht'),('matrix','Erreichbarkeit'),('firewall','Firewall'),('services','Dienste'),('vpn','VPN'),('alerts','Alarme')] %}
+<a href="{{ '/' if p=='index' else '/'+p }}" class="{{ 'on' if page==p }}">{{ l }}</a>{% endfor %}
+<a href="{{ grafana }}" target="_blank" rel="noopener">Grafana ↗</a><a href="{{ prometheus }}" target="_blank" rel="noopener">Prometheus ↗</a></nav></header>
+<main>{% block body %}{% endblock %}</main>
+<script>
+async function api(p,o){const r=await fetch(p,o);let j={};try{j=await r.json()}catch(e){};if(!r.ok)throw new Error(j.detail||r.statusText);return j}
+</script>{% block script %}{% endblock %}</body></html>

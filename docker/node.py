@@ -10,6 +10,7 @@ Konfiguration über Umgebungsvariablen (siehe docker-compose.yml).
 """
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import os
@@ -18,13 +19,19 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+
+import clinic
+import kis_app
+import patient_app
 
 NAME = os.environ.get("NODE_NAME", "node")
 ZONE = os.environ.get("NODE_ZONE", "?")
@@ -37,6 +44,10 @@ ROLE = os.environ.get("ROLE", "node")
 SERVICES = json.loads(os.environ.get("NODE_SERVICES", "[]"))
 SUPERNET = ipaddress.ip_network(os.environ.get("SUPERNET", "10.10.0.0/16"))
 STARTED = time.time()
+LAB_TOKEN = os.environ.get("LAB_TOKEN", "klinikum-lab")
+BACKUP_INTERVAL = int(os.environ.get("BACKUP_INTERVAL", "300"))
+KIS_STORE: clinic.Store | None = None
+FETCH_PORTS = {int(x) for x in os.environ.get("FETCH_PORTS", "80,8080").split(",")}
 
 # Synthetische Daten. Es sind keine echten Personen.
 DATA = {
@@ -93,8 +104,29 @@ class ServiceHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def _auto_backup() -> None:
+    """Das KIS sichert sich regelmäßig selbst (Intervall BACKUP_INTERVAL, Standard 5 Minuten)."""
+    while True:
+        time.sleep(BACKUP_INTERVAL)
+        try:
+            if KIS_STORE and not KIS_STORE.locked:
+                KIS_STORE.backup(reason="automatisch")
+        except Exception as exc:  # noqa: BLE001
+            print("Auto-Backup fehlgeschlagen:", exc, flush=True)
+
+
 def start_http(svc: dict) -> None:
-    handler = type(f"H{svc['port']}", (ServiceHandler,), {"svc": svc})
+    global KIS_STORE
+    kind = svc.get("data")
+    if kind == "kis":
+        KIS_STORE = clinic.Store(os.environ.get("BACKUP_DIR") or None)
+        KIS_STORE.backup(reason="Start")
+        handler = kis_app.make_handler(KIS_STORE, NAME, ZONE, DESCRIPTION)
+        threading.Thread(target=_auto_backup, daemon=True).start()
+    elif kind == "patientportal":
+        handler = patient_app.make_handler()
+    else:
+        handler = type(f"H{svc['port']}", (ServiceHandler,), {"svc": svc})
     srv = ThreadingHTTPServer((BIND, svc["port"]), handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
@@ -230,6 +262,131 @@ def metrics():
         "# TYPE lab_node_service_requests_total counter\n"
         f"lab_node_service_requests_total{{{lab}}} {c['service_requests']}\n"
     )
+
+
+# --------------------------------------------------------------------------
+# Browser-Ersatz: Anfrage aus Sicht dieses Hosts (damit das Portal zeigt, was die Firewall durchlässt)
+# --------------------------------------------------------------------------
+def need_token(token: str | None) -> None:
+    if token != LAB_TOKEN:
+        raise HTTPException(403, "Token fehlt oder falsch")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+class Fetch(BaseModel):
+    url: str
+    method: str = "GET"
+    headers: dict[str, str] = {}
+    body_b64: str = ""
+
+
+@app.post("/fetch")
+def fetch(f: Fetch, x_lab_token: str | None = Header(None)):
+    need_token(x_lab_token)
+    from urllib.parse import urlparse
+
+    u = urlparse(f.url)
+    try:
+        addr = ipaddress.ip_address(u.hostname or "")
+    except ValueError as exc:
+        raise HTTPException(400, "Ziel muss eine IP-Adresse sein") from exc
+    if addr not in SUPERNET:
+        raise HTTPException(400, "Ziel liegt außerhalb des Lab-Netzes")
+    if u.scheme != "http" or (u.port or 80) not in FETCH_PORTS:
+        raise HTTPException(400, "nur http auf Port 80 oder 8080")
+    if f.method not in ("GET", "POST"):
+        raise HTTPException(400, "nur GET und POST")
+    hdr = {k: v for k, v in f.headers.items() if k.lower() in ("cookie", "content-type", "x-prefix")}
+    body = base64.b64decode(f.body_b64) if f.body_b64 else None
+    req = urllib.request.Request(f.url, data=body, method=f.method, headers=hdr)
+    opener = urllib.request.build_opener(_NoRedirect)
+    t0 = time.perf_counter()
+    try:
+        try:
+            resp = opener.open(req, timeout=4)
+        except urllib.error.HTTPError as exc:
+            resp = exc
+        raw = resp.read(1_000_000)
+        out = {"ok": True, "status": resp.status if hasattr(resp, "status") else resp.code, "from": NAME, "zone": ZONE,
+               "content_type": resp.headers.get("Content-Type", "text/html"), "location": resp.headers.get("Location"),
+               "set_cookie": resp.headers.get_all("Set-Cookie") or [], "body_b64": base64.b64encode(raw).decode(),
+               "ms": round((time.perf_counter() - t0) * 1000, 1)}
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        reason = getattr(exc, "reason", exc)
+        out = {"ok": False, "from": NAME, "zone": ZONE, "error": type(reason).__name__, "detail": str(reason)[:120],
+               "ms": round((time.perf_counter() - t0) * 1000, 1)}
+    with lock:
+        counters["probes_ok" if out["ok"] else "probes_failed"] += 1
+    return out
+
+
+# --------------------------------------------------------------------------
+# KIS-Verwaltung (nur auf dem KIS-Host): Backup, Wiederherstellung, Ransomware-Simulation
+# --------------------------------------------------------------------------
+def kis() -> clinic.Store:
+    if KIS_STORE is None:
+        raise HTTPException(404, "kein KIS auf diesem Host")
+    return KIS_STORE
+
+
+class BackupReq(BaseModel):
+    id: str | None = None
+    on: bool | None = None
+
+
+def _wrap(fn):
+    try:
+        return fn()
+    except clinic.NotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (clinic.Conflict, clinic.Locked, clinic.Denied) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/kis/status")
+def kis_status():
+    return kis().status()
+
+
+@app.post("/kis/backup")
+def kis_backup(x_lab_token: str | None = Header(None)):
+    need_token(x_lab_token)
+    return _wrap(lambda: kis().backup(reason="manuell"))
+
+
+@app.post("/kis/verify")
+def kis_verify(r: BackupReq, x_lab_token: str | None = Header(None)):
+    need_token(x_lab_token)
+    return _wrap(lambda: kis().verify(r.id))
+
+
+@app.post("/kis/ransom")
+def kis_ransom(x_lab_token: str | None = Header(None)):
+    need_token(x_lab_token)
+    return _wrap(lambda: kis().ransom())
+
+
+@app.post("/kis/restore")
+def kis_restore(r: BackupReq, x_lab_token: str | None = Header(None)):
+    need_token(x_lab_token)
+    return _wrap(lambda: kis().restore(r.id))
+
+
+@app.post("/kis/worm")
+def kis_worm(r: BackupReq, x_lab_token: str | None = Header(None)):
+    need_token(x_lab_token)
+    return {"worm": kis().set_worm(bool(r.on))}
+
+
+@app.post("/kis/reset")
+def kis_reset(x_lab_token: str | None = Header(None)):
+    need_token(x_lab_token)
+    kis().reset()
+    return {"ok": True}
 
 
 if __name__ == "__main__":

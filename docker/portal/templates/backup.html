@@ -1,0 +1,30 @@
+{% extends "base.html" %}{% block body %}
+<div id="msg"></div>
+<div class="grid" id="kpis"></div>
+<div class="card"><h3 style="margin-top:0">Aktionen</h3>
+<div class="row"><button onclick="act('run')">Backup jetzt</button><button class="ghost" onclick="act('verify',{})">Wiederherstellungstest (letztes Backup)</button>
+<label><input type="checkbox" id="worm" onchange="act('worm',{on:this.checked})"> neue Backups unveränderlich (WORM)</label></div><br>
+<div class="row"><button class="danger" onclick="ransom()">Ransomware-Angriff simulieren</button><button onclick="act('restore',{})">Aus letztem Backup wiederherstellen</button>
+<button class="ghost" onclick="reset()">Demo zurücksetzen</button></div>
+<p class="mute">Szenario A: „unveränderlich“ aus. Der Angriff löscht die Backups, eine Wiederherstellung ist nicht mehr möglich. Szenario B: „unveränderlich“ an. Die Backups überleben, die Wiederherstellung klappt, nur die Änderungen seit dem letzten Backup sind weg (das ist der RPO).
+„Unveränderlich“ ist hier Programmlogik. In der Praxis liefern das Objektspeicher mit Object Lock oder Backup-Systeme mit Retention Lock.</p></div>
+<div class="card"><h3 style="margin-top:0">Backups</h3><table><thead><tr><th>Nr.</th><th>Zeit</th><th>Größe</th><th>Prüfsumme</th><th>Grund</th><th>Schutz</th><th>Test</th></tr></thead><tbody id="bk"></tbody></table></div>
+<div class="grid"><div class="card"><h3 style="margin-top:0">Ereignisse</h3><div id="ev" class="mute"></div></div><div class="card"><h3 style="margin-top:0">KIS-Protokoll (letzte Einträge)</h3><div id="au" class="mute"></div></div></div>
+{% endblock %}{% block script %}<script>
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function note(t,ok){msg.innerHTML=`<div class="card ${ok?'ok':'bad'}">${esc(t)}</div>`}
+async function load(){try{const d=await api('/api/backup/status');
+const age=d.last_backup_ts?Math.round(d.now-d.last_backup_ts):null;
+kpis.innerHTML=[['Daten',d.locked?'<span class="bad">GESPERRT</span>':'<span class="ok">normal</span>'],['Backups',d.backups.length],['Alter letztes Backup',age===null?'<span class="bad">keins</span>':age+' s'],
+['Änderungen seit Backup (RPO)',d.changes_seit_backup===null?'–':d.changes_seit_backup],['Datensätze',Object.values(d.zaehler).reduce((a,b)=>a+b,0)],['Letzte Wiederherstellung',d.restore_ms?Math.round(d.restore_ms)+' ms':'–']]
+.map(([k,v])=>`<div class="card"><div class="mute">${k}</div><div class="kpi">${v}</div></div>`).join('');
+worm.checked=d.worm;
+bk.innerHTML=d.backups.slice().reverse().map(b=>`<tr><td>${esc(b.id)}</td><td>${esc(b.zeit)}</td><td>${b.bytes} B</td><td><code>${esc(b.sha256.slice(0,12))}</code></td><td>${esc(b.grund)}</td><td><span class="pill ${b.immutable?'ok':'bad'}">${b.immutable?'unveränderlich':'ungeschützt'}</span></td><td>${b.verified===null?'–':(b.verified?'<span class="ok">bestanden</span>':'<span class="bad">fehlgeschlagen</span>')}</td></tr>`).join('')||'<tr><td colspan=7 class="bad">Kein Backup vorhanden</td></tr>';
+ev.innerHTML=d.events.slice().reverse().map(e=>`<div class="${e.level==='error'?'bad':e.level==='warn'?'warn':''}">${esc(e.t)} ${esc(e.text)}</div>`).join('');
+au.innerHTML=d.audit.slice().reverse().slice(0,12).map(a=>`<div>${esc(a.t)} <b>${esc(a.who)}</b> ${esc(a.action)}</div>`).join('')}catch(e){kpis.innerHTML=`<div class="card bad">${esc(e.message)}</div>`}}
+async function act(a,body){try{const r=await api('/api/backup/'+a,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+note(a==='restore'?`Wiederhergestellt aus ${r.id}. Verlorene Änderungen (RPO): ${r.verlorene_aenderungen}. Dauer ${r.dauer_ms} ms.`:a==='verify'?(r.ok?'Wiederherstellungstest bestanden: Prüfsumme stimmt.':'Wiederherstellungstest FEHLGESCHLAGEN'):'Erledigt.',true)}catch(e){note(e.message,false)}load()}
+async function ransom(){if(!confirm('Ransomware simulieren? Die Daten im KIS werden gesperrt.'))return;try{const r=await api('/api/backup/ransom',{method:'POST'});note(`Angriff simuliert. Gelöschte Backups: ${r.geloescht.length}. Abgewehrt (unveränderlich): ${r.abgewehrt.length}.`,false)}catch(e){note(e.message,false)}load()}
+async function reset(){await act('reset',{})}
+load();setInterval(load,3000);
+</script>{% endblock %}

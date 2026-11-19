@@ -5,7 +5,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir "fastapi>=0.110" "uvicorn>=0.29"
 WORKDIR /app
-COPY docker/node.py /app/node.py
+COPY docker/node.py docker/clinic.py docker/webui.py docker/kis_app.py docker/patient_app.py /app/
 COPY docker/node-entry.sh /entry.sh
 RUN chmod +x /entry.sh
 ENV WG_QUICK_USERSPACE_IMPLEMENTATION=wireguard-go

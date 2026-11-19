@@ -153,7 +153,10 @@ def start_nodes(t: dict) -> None:
             continue
         env = {"NODE_NAME": h, "NODE_ZONE": hc["zone"], "NODE_IP": hc["ip"], "NODE_TITLE": hc["title"],
                "NODE_DESCRIPTION": hc["description"], "NODE_SERVICES": json.dumps(hc["services"]),
-               "AGENT_PORT": str(t["agent_port"]), "ROLE": hc.get("role", "node"), "WG_BIN": fake}
+               "AGENT_PORT": str(t["agent_port"]), "ROLE": hc.get("role", "node"), "WG_BIN": fake, "LAB_TOKEN": TOKEN}
+        if any(sv.get("data") == "patientportal" for sv in hc["services"]):
+            kh = next(x for x in t["hosts"].values() if any(sv.get("data") == "kis" for sv in x["services"]))
+            env["KIS_URL"] = f"http://{kh['ip']}:8080"
         spawn(PFX + h, [sys.executable, str(ROOT / "docker/node.py")], env)
 
 
@@ -326,6 +329,100 @@ def main() -> int:
         # Agent nur aus mgmt erreichbar
         r = ns_run(PFX + "ws-arzt", f"python3 -c \"import socket;s=socket.socket();s.settimeout(1);s.connect(('{T.zone_gateway(t, 'klinik')}',{api}))\"", check=False)
         check("Firewall-Agent ist aus der Klinik-Zone nicht erreichbar", r.returncode != 0)
+
+        # Anwendungen: Patientenportal, KIS mit Rollen, Backup (durch die echte Firewall)
+        print("Anwendungen (Patientenportal, KIS-Rollen, Backup) …")
+        prog = """
+import requests, json, re
+B = 'http://127.0.0.1:8080/via/'
+out = {}
+s = requests.Session()
+P = B + 'gast-client/patientenportal'
+r = s.get(P + '/'); out['p_form'] = r.status_code == 200 and 'Anmelden' in r.text and 'action="/via/gast-client/patientenportal/login"' in r.text
+r = s.post(P + '/login', data={'pid': 'P-1001', 'pin': '1234'}, allow_redirects=False)
+out['p_login'] = r.status_code == 303 and 'Path=/via/gast-client/patientenportal' in r.headers.get('set-cookie', '')
+r = s.get(P + '/akte'); out['p_akte'] = r.status_code == 200 and 'Bluthochdruck' in r.text and 'Knöchelfraktur' not in r.text
+r = s.get(P + '/rechnungen'); out['p_rechnung'] = 'R-2026-0001' in r.text and 'R-2026-0003' not in r.text
+r = s.get(P + '/archiv/dok?id=A-2018-0102'); out['p_fremd'] = r.status_code == 403
+r = s.get(P + '/termine'); csrf = re.search(r'name=csrf value="([^"]+)"', r.text).group(1)
+import datetime as dt
+d = dt.date.today() + dt.timedelta(days=2)
+while d.weekday() >= 5: d += dt.timedelta(days=1)
+r = s.post(P + '/termine/neu', data={'csrf': csrf, 'abteilung': 'Orthopädie', 'datum': d.isoformat(), 'zeit': '08:30'}, allow_redirects=False)
+out['p_termin'] = r.status_code == 303 and 'msg=' in r.headers.get('location', '')
+def staff(src, user, pw):
+    ss = requests.Session(); K = B + src + '/kis/staff'
+    ss.post(K + '/login', data={'user': user, 'pw': pw}, allow_redirects=False)
+    return ss, K
+a, K = staff('ws-arzt', 'dr.beispiel', 'arzt-lab')
+out['k_arzt'] = 'Erika Beispiel' in a.get(K + '/patienten').text and 'Max Mustermann' not in a.get(K + '/patienten').text
+out['k_arzt_abr'] = a.get(K + '/abrechnung').status_code == 403
+e, K = staff('ws-verwaltung', 'empfang.lab', 'empfang-lab')
+out['k_empfang_akte'] = e.get(K + '/patient?id=P-1001').status_code == 403
+out['k_empfang_termine'] = e.get(K + '/termine').status_code == 200
+b, K = staff('ws-verwaltung', 'abrechnung.lab', 'abrechnung-lab')
+t = b.get(K + '/abrechnung'); out['k_abr'] = t.status_code == 200 and 'Bluthochdruck' not in t.text
+i, K = staff('mgmt-hub', 'admin.lab', 'admin-lab')
+out['k_it'] = i.get(K + '/protokoll').status_code == 200 and i.get(K + '/patienten').status_code == 403
+h, K = staff('aerztin-handy', 'dr.beispiel', 'arzt-lab')
+out['k_vpn'] = h.get(K + '/patienten').status_code == 200
+g = requests.get(B + 'gast-client/kis/staff'); out['k_gast_blockiert'] = 'Verbindung nicht möglich' in g.text and 'Das ist erwartet' in g.text
+m = requests.get(B + 'mrt/kis/staff'); out['k_mrt_blockiert'] = 'Verbindung nicht möglich' in m.text and 'Das ist erwartet' in m.text
+print(json.dumps(out))
+"""
+        cp = hub_py(prog)
+        try:
+            o = json.loads(cp.stdout)
+        except ValueError:
+            o = {}
+            print(cp.stderr[-600:])
+        labels = {"p_form": "Patientenportal aus dem Gäste-WLAN erreichbar (Präfix, Links)", "p_login": "Patient meldet sich an (Cookie nur für den Präfix-Pfad)",
+                  "p_akte": "Patient sieht nur die eigene Akte", "p_rechnung": "Patient sieht nur eigene Rechnungen", "p_fremd": "Fremdes Archivdokument wird verweigert",
+                  "p_termin": "Patient bucht einen Termin (Portal → KIS durch die Firewall)",
+                  "k_arzt": "KIS: Ärztin sieht nur ihre Patienten (von der Station)", "k_arzt_abr": "KIS: Ärztin hat keinen Zugriff auf die Abrechnung",
+                  "k_empfang_akte": "KIS: Empfang darf keine Akte öffnen", "k_empfang_termine": "KIS: Empfang sieht Termine", "k_abr": "KIS: Abrechnung sieht keine Diagnosen",
+                  "k_it": "KIS: IT-Admin (Management-Zone) sieht Protokoll, aber keine Patienten", "k_vpn": "KIS: Ärztin per VPN-Handy erreicht das KIS",
+                  "k_gast_blockiert": "Gast → KIS wird von der Firewall verworfen (erwartet)", "k_mrt_blockiert": "MRT → KIS wird von der Firewall verworfen (erwartet)"}
+        for k, lab in labels.items():
+            check(lab, o.get(k) is True)
+        fw = hub_json("GET", "/api/firewall")["body"]["rules"]
+        hits = {r["id"]: r["packets"] for r in fw}
+        check("Firewall-Zähler P09 (Gast → Portal) und P10 (Portal → KIS) zählen", hits.get("P09", 0) > 0 and hits.get("P10", 0) > 0, str({k: hits.get(k) for k in ("P09", "P10")}))
+
+        # Zone server isolieren: Patientenportal fällt freundlich aus
+        hub_json("POST", "/api/isolate/server")
+        pr = hub_py("""
+import requests
+r = requests.post('http://127.0.0.1:8080/via/gast-client/patientenportal/login', data={'pid': 'P-1001', 'pin': '1234'}, allow_redirects=False)
+print(r.status_code, 'Gerade nicht erreichbar' in r.text)
+""").stdout.split()
+        check("Zone server isoliert: Patientenportal zeigt Hinweisseite statt Fehler", pr[:2] == ["503", "True"], str(pr))
+        hub_json("POST", "/api/release/server")
+        pr = hub_py("""
+import requests
+r = requests.post('http://127.0.0.1:8080/via/gast-client/patientenportal/login', data={'pid': 'P-1001', 'pin': '1234'}, allow_redirects=False)
+print(r.status_code)
+""").stdout.split()
+        check("Nach Freigabe funktioniert die Anmeldung wieder", pr[:1] == ["303"], str(pr))
+
+        # Backup und Ransomware über das Portal
+        def bk(action, body=None):
+            code = (f"import requests,json;r=requests.post('http://127.0.0.1:8080/api/backup/{action}',json={body or {}!r},timeout=20);"
+                    "print(json.dumps({'status':r.status_code,'body':r.json()}))")
+            return json.loads(hub_py(code).stdout)
+        st0 = hub_json("GET", "/api/backup/status")["body"]
+        check("Backup-Seite: KIS hat Start-Backup, Daten nicht gesperrt", len(st0["backups"]) >= 1 and st0["locked"] is False)
+        met = hub_py("import requests;print(requests.get('http://127.0.0.1:8080/metrics').text)").stdout
+        check("Metriken lab_backup_age_seconds und lab_kis_locked vorhanden", "lab_backup_age_seconds" in met and "lab_kis_locked 0" in met)
+        bk("run")
+        r = bk("ransom")
+        check("Ransomware-Simulation über das Portal", r["status"] == 200 and r["body"]["gesperrt"] is True)
+        met = hub_py("import requests;print(requests.get('http://127.0.0.1:8080/metrics', timeout=10).text)").stdout
+        check("Metrik lab_kis_locked springt auf 1 (löst Alarm KisDatenGesperrt aus)", "lab_kis_locked 1" in met)
+        r = bk("restore")
+        check("Wiederherstellung über das Portal", r["status"] == 200 and r["body"]["dauer_ms"] >= 0, str(r))
+        met = hub_py("import requests;print(requests.get('http://127.0.0.1:8080/metrics', timeout=10).text)").stdout
+        check("Nach der Wiederherstellung ist lab_kis_locked wieder 0", "lab_kis_locked 0" in met)
     finally:
         cleanup()
 

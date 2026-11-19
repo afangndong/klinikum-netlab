@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h3 style="margin-top:0">Anwendungen ausprobieren, aus Sicht verschiedener Geräte</h3>
+<p class="mute">Jede Anfrage läuft über das gewählte Gerät und durch die echte Firewall. So siehst du zwei Schutzebenen: erst das <b>Netz</b> (darf das Gerät den Dienst erreichen?),
+dann die <b>Rolle</b> (was darf der angemeldete Benutzer darin?). Die Seiten öffnen sich in einem neuen Tab. Die Lab-Zugangsdaten stehen jeweils dabei.</p></div>
+{% for r in rows %}<div class="card"><div class="row"><div style="flex:1;min-width:16rem"><b>{{ r.title }}</b><br>
+<span class="mute">Von <code>{{ r.src }}</code> (Zone {{ r.zone }}) nach <code>{{ r.dst }}</code>:{{ r.port }}</span><br>
+<span class="mute">Anmeldung: {{ r.who }}</span><br>{{ r.lern }}</div>
+<div><span class="pill {{ 'ok' if r.allowed else 'bad' }}">Firewall: {{ 'erlaubt' if r.allowed else 'verboten' }}{% if r.rule %} ({{ r.rule }}){% endif %}</span><br><br>
+<a href="{{ r.url }}" target="_blank" rel="noopener"><button class="{{ '' if r.allowed else 'ghost' }}">{{ 'Öffnen' if r.allowed else 'Trotzdem versuchen' }}</button></a></div></div></div>{% endfor %}
+<div class="card"><h3 style="margin-top:0">Weiter ausprobieren</h3><ul>
+<li>Zone <code>server</code> unter <a href="/firewall">Firewall</a> isolieren: Das Patientenportal zeigt eine freundliche Hinweisseite, das KIS ist weg.</li>
+<li>Auf der Seite <a href="/backup">Backup</a> einen Ransomware-Angriff simulieren und aus dem unveränderlichen Backup wiederherstellen.</li>
+<li>Wer das KIS öffnen kann, ist Sache des Netzes. Was er dort sehen darf, ist Sache der Rolle. Beides wird protokolliert (KIS-Protokoll, Firewall-Zähler).</li></ul></div>
+{% endblock %}

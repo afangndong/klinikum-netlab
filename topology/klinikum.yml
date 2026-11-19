@@ -41,7 +41,7 @@ hosts:
     zone: server
     ip: 10.10.20.10
     title: "KIS (Krankenhausinformationssystem)"
-    description: "Patientenakte und Dokumentation (synthetische Daten)."
+    description: "Akte, Termine, Abrechnung und Archiv mit Rollen (Ärztin, Pflege, Empfang, Abrechnung, IT). Synthetische Daten."
     services:
       - {name: kis-web, port: 8080, kind: http, data: kis, title: "KIS Weboberfläche"}
   pacs:
@@ -141,9 +141,9 @@ hosts:
     zone: dmz
     ip: 10.10.70.10
     title: "Patientenportal"
-    description: "Terminbuchung für Patienten, spricht intern nur mit dem KIS."
+    description: "Patienten sehen Akte, Termine, Rechnungen und Archiv. Das Portal fragt intern nur das KIS."
     services:
-      - {name: portal-web, port: 8080, kind: http, data: generic, title: "Patientenportal"}
+      - {name: portal-web, port: 8080, kind: http, data: patientportal, title: "Patientenportal"}
   vpn-gw:
     zone: dmz
     ip: 10.10.70.11

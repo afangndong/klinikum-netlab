@@ -8,6 +8,7 @@ Das Portal ist Teil des Labs. Es hat bewusst keine Anmeldung. Nicht ins Internet
 """
 from __future__ import annotations
 
+import base64
 import html
 import json
 import os
@@ -20,7 +21,8 @@ import jinja2
 import requests
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 
 from netlab import topology as T
@@ -344,6 +346,173 @@ async def alert_webhook(request: Request):
     return JSONResponse({"ok": True})
 
 
+# --------------------------------------------------------------------------
+# Anwendungen ausprobieren: Browser-Ersatz aus Sicht verschiedener Hosts
+# --------------------------------------------------------------------------
+def _find_host(kind: str) -> str:
+    return next(h for h, hc in TOPO["hosts"].items() if any(sv.get("data") == kind for sv in hc["services"]))
+
+
+KIS_HOST = _find_host("kis")
+PP_HOST = _find_host("patientportal")
+KIS_AGENT = f"http://{TOPO['hosts'][KIS_HOST]['ip']}:{AGENT_PORT}"
+
+
+def _http_port(host: str) -> int:
+    return next(sv["port"] for sv in TOPO["hosts"][host]["services"] if sv["kind"] == "http")
+
+
+APPS = [
+    {"title": "Patient im Gäste-WLAN öffnet das Patientenportal", "src": "gast-client", "dst": PP_HOST, "path": "",
+     "who": "Patient (P-1001 / PIN 1234)", "lern": "Der Patient sieht nur seine eigenen Daten. Das Portal fragt das KIS (Regel P10), nie die Datenbank."},
+    {"title": "Ärztin auf der Station öffnet das KIS", "src": "ws-arzt", "dst": KIS_HOST, "path": "staff",
+     "who": "dr.beispiel / arzt-lab", "lern": "Akte mit Befunden, nur Patienten mit Behandlungsbezug. Notfallzugriff mit Begründung."},
+    {"title": "Pflege auf der Station öffnet das KIS", "src": "ws-pflege", "dst": KIS_HOST, "path": "staff",
+     "who": "schwester.test / pflege-lab", "lern": "Medikation ja, Befunde nein, kein Notfallzugriff."},
+    {"title": "Empfang (Verwaltung) öffnet das KIS", "src": "ws-verwaltung", "dst": KIS_HOST, "path": "staff",
+     "who": "empfang.lab / empfang-lab", "lern": "Termine vergeben, aber keine Akte und keine Abrechnung."},
+    {"title": "Abrechnung (Verwaltung) öffnet das KIS", "src": "ws-verwaltung", "dst": KIS_HOST, "path": "staff",
+     "who": "abrechnung.lab / abrechnung-lab", "lern": "Rechnungen und Beträge, keine Diagnosen, keine Termine."},
+    {"title": "IT-Administration aus der Management-Zone", "src": HUB, "dst": KIS_HOST, "path": "staff",
+     "who": "admin.lab / admin-lab", "lern": "Sieht das Protokoll, aber keine Patientendaten (Datenschutz)."},
+    {"title": "Dienst-Handy der Ärztin per VPN", "src": "aerztin-handy", "dst": KIS_HOST, "path": "staff",
+     "who": "dr.beispiel / arzt-lab", "lern": "Der Zugriff läuft durch den Tunnel. Die Firewall erlaubt nur das KIS (Regel P15)."},
+    {"title": "Gast versucht, das KIS direkt zu öffnen", "src": "gast-client", "dst": KIS_HOST, "path": "staff",
+     "who": "kein Zugang", "lern": "Die Firewall verwirft die Verbindung. Auf Netzebene scheitert es, bevor eine Anmeldung möglich ist."},
+    {"title": "MRT versucht, das KIS zu öffnen", "src": "mrt", "dst": KIS_HOST, "path": "staff",
+     "who": "kein Zugang", "lern": "Medizingeräte dürfen nur zum PACS. Alles andere ist verboten."},
+]
+
+
+@app.get("/apps", response_class=HTMLResponse)
+def apps_page(request: Request):
+    rows = []
+    for a in APPS:
+        ok, rule = T.is_allowed(TOPO, a["src"], a["dst"], "tcp", _http_port(a["dst"]))
+        rows.append({**a, "zone": TOPO["hosts"][a["src"]]["zone"], "allowed": ok, "rule": rule,
+                     "url": f"/via/{a['src']}/{a['dst']}/{a['path']}", "port": _http_port(a["dst"])})
+    return render("apps.html", request, rows=rows)
+
+
+@app.api_route("/via/{src}/{dst}/{path:path}", methods=["GET", "POST"])
+async def via(src: str, dst: str, path: str, request: Request):
+    """Öffnet eine Seite so, als säße der Browser auf dem Host src. Die Anfrage läuft über dessen Messpunkt
+    und durch die echte Firewall. Cookies und Formulare werden durchgereicht."""
+    if src not in TOPO["hosts"] or dst not in TOPO["hosts"] or src == dst:
+        raise HTTPException(404, "unbekannter Host")
+    if not any(sv["kind"] == "http" for sv in TOPO["hosts"][dst]["services"]):
+        raise HTTPException(404, "Ziel hat keinen Web-Dienst")
+    port = _http_port(dst)
+    url = f"http://{TOPO['hosts'][dst]['ip']}:{port}/{path}" + (f"?{request.url.query}" if request.url.query else "")
+    body = await request.body()
+    hdr = {"X-Prefix": f"/via/{src}/{dst}"}
+    for k in ("cookie", "content-type"):
+        if request.headers.get(k):
+            hdr[k.title() if k == "cookie" else "Content-Type"] = request.headers[k]
+
+    def go() -> dict:
+        if src == HUB:
+            try:
+                r = requests.request(request.method, url, data=body or None, headers=hdr, timeout=5, allow_redirects=False)
+            except requests.RequestException as exc:
+                return {"ok": False, "from": src, "zone": TOPO["hosts"][src]["zone"], "error": type(exc).__name__, "detail": str(exc)[:120]}
+            return {"ok": True, "status": r.status_code, "content_type": r.headers.get("Content-Type", "text/html"),
+                    "set_cookie": r.raw.headers.getlist("Set-Cookie") if hasattr(r.raw.headers, "getlist") else ([r.headers["Set-Cookie"]] if "Set-Cookie" in r.headers else []),
+                    "location": r.headers.get("Location"), "body_b64": base64.b64encode(r.content).decode(), "from": src}
+        try:
+            r = requests.post(f"http://{TOPO['hosts'][src]['ip']}:{AGENT_PORT}/fetch", headers={"X-Lab-Token": LAB_TOKEN}, timeout=10,
+                              json={"url": url, "method": request.method, "headers": hdr, "body_b64": base64.b64encode(body).decode() if body else ""})
+            r.raise_for_status()
+            return r.json()
+        except requests.RequestException as exc:
+            return {"ok": False, "from": src, "zone": TOPO["hosts"][src]["zone"], "error": "Messpunkt nicht erreichbar", "detail": str(exc)[:120]}
+
+    res = await run_in_threadpool(go)
+    if not res.get("ok"):
+        ok, rule = T.is_allowed(TOPO, src, dst, "tcp", port)
+        return render("via_error.html", request, src=src, dst=dst, port=port, zone=TOPO["hosts"][src]["zone"], dzone=TOPO["hosts"][dst]["zone"],
+                      res=res, should_allow=ok, rule=rule)
+    out = Response(content=base64.b64decode(res["body_b64"]), status_code=res["status"], media_type=None)
+    out.headers["Content-Type"] = res.get("content_type") or "text/html"
+    if res.get("location"):
+        out.headers["Location"] = res["location"]
+    for c in res.get("set_cookie") or []:
+        out.headers.append("set-cookie", c)
+    out.headers["Cache-Control"] = "no-store"
+    return out
+
+
+# --------------------------------------------------------------------------
+# Backup und Ransomware-Simulation des KIS
+# --------------------------------------------------------------------------
+_KIS_CACHE: dict = {"t": 0.0, "data": None}
+
+
+def kis_status(max_age: float = 2.0) -> dict | None:
+    if time.time() - _KIS_CACHE["t"] < max_age:
+        return _KIS_CACHE["data"]
+    try:
+        r = requests.get(f"{KIS_AGENT}/kis/status", timeout=2)
+        r.raise_for_status()
+        _KIS_CACHE.update(t=time.time(), data=r.json())
+    except requests.RequestException:
+        _KIS_CACHE.update(t=time.time(), data=None)
+    return _KIS_CACHE["data"]
+
+
+def backup_metrics(st: dict | None) -> list[str]:
+    if st is None:
+        return ["# TYPE lab_kis_reachable gauge", "lab_kis_reachable 0"]
+    bk = st["backups"]
+    age = (st["now"] - st["last_backup_ts"]) if st["last_backup_ts"] else 999999
+    imm = sum(1 for b in bk if b["immutable"])
+    return [
+        "# TYPE lab_kis_reachable gauge", "lab_kis_reachable 1",
+        "# TYPE lab_kis_locked gauge", f"lab_kis_locked {1 if st['locked'] else 0}",
+        "# TYPE lab_backup_age_seconds gauge", f"lab_backup_age_seconds {age:.0f}",
+        "# TYPE lab_backup_count gauge", f"lab_backup_count {len(bk)}",
+        "# TYPE lab_backup_immutable_count gauge", f"lab_backup_immutable_count {imm}",
+        "# TYPE lab_backup_immutable_ratio gauge", f"lab_backup_immutable_ratio {(imm / len(bk)) if bk else 0:.2f}",
+        "# TYPE lab_backup_changes_since gauge", f"lab_backup_changes_since {st['changes_seit_backup'] or 0}",
+        "# TYPE lab_backup_restore_ms gauge", f"lab_backup_restore_ms {st['restore_ms']:.1f}",
+    ]
+
+
+@app.get("/backup", response_class=HTMLResponse)
+def backup_page(request: Request):
+    return render("backup.html", request)
+
+
+@app.get("/api/backup/status")
+def api_backup_status():
+    st = kis_status(0)
+    if st is None:
+        raise HTTPException(503, "KIS-Messpunkt nicht erreichbar")
+    return st
+
+
+_BACKUP_ACTIONS = {"run": "backup", "verify": "verify", "ransom": "ransom", "restore": "restore", "worm": "worm", "reset": "reset"}
+
+
+@app.post("/api/backup/{action}")
+async def api_backup_action(action: str, request: Request):
+    if action not in _BACKUP_ACTIONS:
+        raise HTTPException(404, "unbekannte Aktion")
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = {}
+    try:
+        r = await run_in_threadpool(lambda: requests.post(f"{KIS_AGENT}/kis/{_BACKUP_ACTIONS[action]}", json=payload,
+                                                          headers={"X-Lab-Token": LAB_TOKEN}, timeout=6))
+    except requests.RequestException as exc:
+        raise HTTPException(503, "KIS-Messpunkt nicht erreichbar") from exc
+    _KIS_CACHE["t"] = 0
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.json().get("detail", "Fehler"))
+    return r.json()
+
+
 @app.get("/metrics", response_class=PlainTextResponse)
 def metrics():
     m = STATE["matrix"]
@@ -353,6 +522,7 @@ def metrics():
         "# TYPE lab_matrix_last_run_timestamp_seconds gauge", f"lab_matrix_last_run_timestamp_seconds {m['ts'] or 0:.0f}",
     ]
     lines += vpnlive.metrics_lines(vpnlive.fetch(TOPO, AGENT_PORT))
+    lines += backup_metrics(kis_status())
     return "\n".join(lines) + "\n"
 
 

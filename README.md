@@ -62,3 +62,6 @@ medgeraete (MRT, Infusion, EKG) · gast · dmz (Patientenportal, VPN-Gateway) ·
 - `docs/VPN-BETRIEB.md`: VPN in echt, Rollen, Rollout, Architektur eines Klinikums, Fehlersuche
 - `docs/DEPLOYMENT.md`: Installation und Deployment Schritt für Schritt
 - `docs/ARCHITEKTUR.md`, `docs/INTERVIEW.md`
+
+## Anwendungen (Patientenportal, KIS mit Rollen, Backup)
+Siehe `docs/ANWENDUNGEN.md`. Nach `make up`: http://localhost:8080 → **Anwendungen** und **Backup**. Tests: `make apptest`, `make test`.

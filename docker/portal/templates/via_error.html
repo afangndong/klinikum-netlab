@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block body %}
+<div class="card"><h3 style="margin-top:0" class="bad">Verbindung nicht möglich</h3>
+<p>Von <code>{{ src }}</code> (Zone {{ zone }}) nach <code>{{ dst }}</code> (Zone {{ dzone }}), Port {{ port }}, kam keine Antwort: <b>{{ res.get('error') }}</b>{% if res.get('detail') %} <span class="mute">({{ res.detail }})</span>{% endif %}.</p>
+{% if not should_allow %}<p class="ok"><b>Das ist erwartet.</b> Laut Policy ist diese Verbindung verboten. Die Firewall verwirft sie, bevor eine Anmeldung überhaupt möglich ist.</p>
+{% else %}<p class="bad"><b>Das ist nicht erwartet.</b> Laut Policy ist die Verbindung erlaubt{% if rule %} (Regel {{ rule }}){% endif %}. Mögliche Ursachen: Dienst läuft nicht, Zone isoliert (Seite Firewall), Regel von Hand geändert (Seite Erreichbarkeit zeigt Abweichungen).</p>{% endif %}
+<p><a href="/apps">Zurück zu den Anwendungen</a></p></div>
+{% endblock %}

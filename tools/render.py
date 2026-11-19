@@ -197,7 +197,17 @@ def render_compose(t: dict) -> dict:
             "NODE_SERVICES": json.dumps(hc["services"], ensure_ascii=False),
             "AGENT_PORT": str(t["agent_port"]),
             "ROLE": role,
+            "LAB_TOKEN": "${LAB_TOKEN:-klinikum-lab}",
         }
+        kinds = {sv.get("data") for sv in hc["services"]}
+        if "kis" in kinds or "patientportal" in kinds:
+            env["PORTAL_KEY"] = "${PORTAL_KEY:-portal-lab-key}"
+        if "kis" in kinds:
+            env["BACKUP_INTERVAL"] = "${BACKUP_INTERVAL:-300}"
+        if "patientportal" in kinds:
+            kh = next(h for h in t["hosts"].values() if any(sv.get("data") == "kis" for sv in h["services"]))
+            kp = next(sv["port"] for sv in kh["services"] if sv.get("data") == "kis")
+            env["KIS_URL"] = f"http://{kh['ip']}:{kp}"
         svc = {
             "image": NODE_IMAGE,
             "build": {"context": ".", "dockerfile": "docker/Dockerfile.node"},
@@ -305,6 +315,15 @@ ALERTS = {
             {"alert": "VpnPeerUnerwartetesLand", "expr": "lab_vpn_peer_geo_unexpected == 1", "for": "0m",
              "labels": {"severity": "critical"},
              "annotations": {"summary": "VPN-Peer {{ $labels.peer }} verbindet sich aus {{ $labels.country }}, nicht aus einem erlaubten Land"}},
+            {"alert": "BackupZuAlt", "expr": "lab_backup_age_seconds > 900", "for": "1m",
+             "labels": {"severity": "warning"},
+             "annotations": {"summary": "Das letzte KIS-Backup ist älter als 15 Minuten (Lab-Wert). Wiederherstellungspunkt (RPO) wächst."}},
+            {"alert": "KisDatenGesperrt", "expr": "lab_kis_locked == 1", "for": "0m",
+             "labels": {"severity": "critical"},
+             "annotations": {"summary": "KIS-Daten sind verschlüsselt oder gesperrt (Ransomware-Verdacht). Notbetrieb und Wiederherstellung einleiten."}},
+            {"alert": "BackupNichtUnveraenderlich", "expr": "lab_backup_immutable_ratio < 1", "for": "1m",
+             "labels": {"severity": "warning"},
+             "annotations": {"summary": "Nicht alle Backups sind unveränderlich (WORM). Ein Angreifer könnte sie löschen."}},
             {"alert": "PolicyAbweichung", "expr": "lab_policy_mismatch > 0", "for": "2m",
              "labels": {"severity": "critical"},
              "annotations": {"summary": "Die Firewall verhält sich anders als die Policy in topology/klinikum.yml"}},
@@ -363,6 +382,12 @@ def render_dashboard(t: dict) -> dict:
         _panel(9, "Dienste im Überblick (1 = erreichbar)", "table", 0, 20, 24, 10,
                tgt('probe_success{job="blackbox-tcp"}', instant=True, fmt="table"),
                transformations=[{"id": "organize", "options": {"excludeByName": {"Time": True, "__name__": True, "job": True, "instance": True}}}]),
+        _panel(10, "Alter des letzten Backups (Sekunden)", "stat", 0, 30, 8, 4, tgt("max(lab_backup_age_seconds)", instant=True),
+               options=stat_opts, fieldConfig={"defaults": {"unit": "s", "thresholds": thresholds(("green", None), ("orange", 600), ("red", 900))}, "overrides": []}),
+        _panel(11, "KIS-Daten gesperrt (0 = normal)", "stat", 8, 30, 8, 4, tgt("max(lab_kis_locked) or vector(0)", instant=True),
+               options=stat_opts, fieldConfig={"defaults": {"thresholds": thresholds(("green", None), ("red", 1))}, "overrides": []}),
+        _panel(12, "Backups im Bestand und davon unveränderlich", "timeseries", 16, 30, 8, 4,
+               tgt("lab_backup_count", "Backups") + [{"expr": "lab_backup_immutable_count", "legendFormat": "unveränderlich", "refId": "B", "instant": False}]),
     ]
     return {
         "uid": "klinikum-netz", "title": "Klinikum-Netz Übersicht", "schemaVersion": 39, "version": 1,
